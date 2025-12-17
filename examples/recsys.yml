@@ -1,0 +1,154 @@
+# AB, History, UserFeatures
+# Recall
+# Features
+# Filters
+# Ranking
+# ReRanking
+# PostProcess
+
+name: st/topnav/v1
+timeout: 800ms
+
+nodes:
+  rate_limit:
+    kind: st/rate_limit
+    spec:
+  downgrade:
+    kind: st/downgrade
+    spec:
+      is_branch: true
+      branchs:
+        succ:
+          - personalization
+        hotlist:
+          - downgrade_hotlist
+        emergency:
+          - downgrade_emergency
+
+  downgrade_emergency:
+    kind: core/basenode
+    spec:
+  emergency_output:
+    kind: st/output/mid
+    spec:
+  emergency_logging:
+    kind: st/logging
+    spec:
+
+  downgrade_hotlist:
+    kind: core/basenode
+    spec:
+  failover_hotlist:
+    kind: st/failover
+    spec:
+      failover_source: stGlobalHotBoard
+  history_hotlist:
+    kind: st/history/topnav
+    spec:
+      timeout: 70ms
+      failover_on_timeout: true
+      failover_on_error: true
+  hotlist_output:
+    kind: st/output/mid
+    spec:
+  hotlist_logging:
+    kind: st/logging
+    spec:
+
+  personalization:
+    kind: core/basenode
+    spec:
+  failover_personalization:
+    kind: st/failover
+    spec:
+      failover_source: stGlobalHotBoard
+  ab_configs:
+    kind: st/ab_configs
+    spec:
+  history:
+    kind: st/history/topnav
+    spec:
+      timeout: 70ms
+      failover_on_timeout: true
+      failover_on_error: true
+  user_features:
+    kind: st/user_features
+    spec:
+      timeout: 100ms
+      failover_on_timeout: true
+      failover_on_error: true
+  recall:
+    kind: st/recall
+    spec:
+  item_features:
+    kind: st/item_features
+    spec:
+  gen_features:
+    kind: st/gen_features
+    spec:
+  filter:
+    kind: st/filter
+    spec:
+  rank:
+    kind: st/rank
+    spec:
+  rerank:
+    kind: st/rerank
+    spec:
+  output:
+    kind: st/output/mid
+    spec:
+  logging:
+    kind: st/logging
+    spec:
+
+edges:
+  rate_limit:
+    - downgrade
+  downgrade:
+    - personalization
+    - downgrade_hotlist
+    - downgrade_emergency
+
+  downgrade_emergency:
+    - emergency_output
+  emergency_output:
+    - emergency_logging
+
+  downgrade_hotlist:
+    - failover_hotlist
+    - history_hotlist
+  failover_hotlist:
+    - hotlist_output
+  history_hotlist:
+    - hotlist_output
+  hotlist_output:
+    - hotlist_logging
+
+  personalization:
+    - failover_personalization
+    - ab_configs
+    - history
+  failover_personalization:
+    - output
+  ab_configs:
+    - user_features
+  history:
+    - recall
+  user_features:
+    - recall
+  recall:
+    - item_features
+    - gen_features
+  gen_features:
+    - filter
+  item_features:
+    - filter
+  filter:
+    - rank
+  rank:
+    - rerank
+  rerank:
+    - output
+  output:
+    - logging
