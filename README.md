@@ -1,5 +1,7 @@
 # GoDAG
 
+**English** | [简体中文](README.zh-CN.md)
+
 GoDAG is a lightweight DAG (Directed Acyclic Graph) workflow execution engine written in Go.
 
 It lets you describe a graph of tasks in YAML, register your own task implementations in Go, and execute the graph with **automatic dependency resolution, parallel scheduling, per-node/graph timeouts, fault-tolerant failover, conditional branching, and Airflow-style trigger rules**. It is designed for low-latency online services (e.g. recommendation / retrieval pipelines) where many independent steps must run concurrently under a strict latency budget.
