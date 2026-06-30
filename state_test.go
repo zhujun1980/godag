@@ -67,7 +67,7 @@ nodes:
 	if !os.IsTimeout(err) {
 		t.Fatalf("%d: %s\n", cnt, err.Error())
 	}
-	t.Logf("%d: %v - %s - %s", cnt, state, req.Data, err.Error())
+	t.Logf("%d: %v - %s - %s", cnt, state, req.Get(), err.Error())
 
 	state, req, err = runGraph(`
 name: test-graph
@@ -143,9 +143,8 @@ edges:
 	if state.Results[state.Symbols["test3"]].Result != "200" {
 		t.Fatalf("%d: %s\n", cnt, "state.Results[state.Symbols[\"test3\"]].Result != \"200\"")
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGState2(t *testing.T) {
@@ -214,9 +213,8 @@ edges:
 	if state.States[state.Symbols["test6"]] != TERMINATE_SUCCESS {
 		t.Fatalf("%d: %s\n", cnt, "state.States[state.Symbols[\"test6\"]].State != TERMINATE_SUCCESS")
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGState3(t *testing.T) {
@@ -276,9 +274,8 @@ edges:
 	if state.Results[state.Symbols["test4"]].Result != "200" {
 		t.Fatalf("%d: %s\n", cnt, "state.Results[state.Symbols[\"test4\"]].Result != \"200\"")
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGState4(t *testing.T) {
@@ -371,9 +368,8 @@ edges:
 	if state.States[state.Symbols["test7"]] != TERMINATE_SUCCESS {
 		t.Fatalf("%d: %s\n", cnt, "state.States[state.Symbols[\"test7\"]].State != TERMINATE_SKIPPED")
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGState5(t *testing.T) {
@@ -458,7 +454,7 @@ edges:
 	if state.States[state.Symbols["test7"]] != TERMINATE_SKIPPED {
 		t.Fatalf("%d: %s\n", cnt, "state.States[state.Symbols[\"test7\"]].State != TERMINATE_SKIPPED")
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	state, req, err = runGraph(`
 name: test-graph
@@ -539,7 +535,7 @@ edges:
 		t.Fatalf("%d: %s\n", cnt, "state.States[state.Symbols[\"test7\"]].State != TERMINATE_SKIPPED")
 	}
 
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	state, req, err = runGraph(`
 name: test-graph
@@ -621,8 +617,7 @@ edges:
 		t.Fatalf("%d: %s\n", cnt, "state.States[state.Symbols[\"test7\"]].State != TERMINATE_SUCCESS")
 	}
 
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
-	t.Errorf("SUCCESS")
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 }
 
 func TestDAGState6(t *testing.T) {
@@ -666,6 +661,5 @@ edges:
 	if state.GraphState != TERMINATE_SUCCESS {
 		t.Fatalf("%d: %s\n", cnt, "state.GraphState != TERMINATE_SUCCESS")
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
-	t.Errorf("SUCCESS")
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 }
