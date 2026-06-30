@@ -16,6 +16,46 @@ It lets you describe a graph of tasks in YAML, register your own task implementa
 - **Trigger conditions** — 10 Airflow-style rules (`all_success`, `one_failed`, `none_failed_min_one_success`, …) control when a node runs based on the state of its upstreams.
 - **Pluggable nodes** — register node types by name through a factory registry.
 
+## Use Cases
+
+GoDAG is an **in-process, request-scoped task orchestration engine** for online,
+latency-sensitive services. It fits best when a single request (or execution)
+needs to run many interdependent steps under a tight latency budget, with
+parallelism, per-node timeouts, and graceful degradation.
+
+**Well suited for:**
+
+- **Online recommendation / retrieval / search pipelines** — the bundled
+  [`examples/recsys.yaml`](/examples/recsys.yaml): rate limit → downgrade branch
+  → recall → features → filter → rank → rerank → output. Features are fetched in
+  parallel, slow ones fall back via `parallel_failover` + `failover_on_timeout`,
+  and a branch node degrades to a hot-list or emergency path under load.
+- **Service orchestration / BFF aggregation** — fan out to multiple downstreams
+  (user, product, inventory, price, risk) that have both dependencies and
+  parallelism; degrade non-critical calls to cached/default values on error
+  instead of failing the whole request.
+- **Risk control / fraud-decision flows** — run scoring rules and models in
+  parallel, then combine them with trigger conditions (`one_failed` to reject on
+  any hard-rule hit, `none_failed_min_one_success` for soft rules) and branch to
+  *allow / review / reject*.
+- **Request-time feature computation** — multi-source fetch → clean → derive →
+  assemble, with slow features degrading without blocking the main path.
+- **Multi-model inference with fallback (incl. LLM/RAG)** — e.g. parallel recall
+  → rerank → primary model, with `parallel_failover` switching to a faster small
+  model or a cached answer when the primary is slow or errors.
+
+**Not designed for** (out of the engine's current scope):
+
+- **Cross-process / distributed scheduling** — it is an in-process library with
+  no persistence, worker cluster, or durable retries (it is not Airflow /
+  Temporal).
+- **Long-running batch / ETL** (minutes to hours) — the timeout model and
+  fully-in-memory design target millisecond-scale work.
+- **State persistence, resume-from-checkpoint, or cron-style scheduling.**
+- **Dynamic graphs** — the graph is fixed at `LoadGraph` time; nodes cannot be
+  added or removed at runtime (branching only skips or activates already-declared
+  nodes).
+
 ## Installation
 
 ```bash
