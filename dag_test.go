@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,7 +74,22 @@ type myContextKey string
 const requestDataKey myContextKey = "request"
 
 type myRequestData struct {
+	mu   sync.Mutex
 	Data string
+}
+
+// Append 加锁追加，供并行执行的节点安全地写入共享请求数据。
+func (r *myRequestData) Append(s string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.Data += s
+}
+
+// Get 加锁读取，避免与仍在执行的节点 goroutine 的写入竞态。
+func (r *myRequestData) Get() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Data
 }
 
 type NodeMock struct {
@@ -147,7 +163,7 @@ func (node *NodeMock) Execute(ctx context.Context, state *ExecutionState) *NodeR
 	}
 
 	request := ctx.Value(requestDataKey).(*myRequestData)
-	request.Data += " " + node.Data
+	request.Append(" " + node.Data)
 
 	deadline, _ := ctx.Deadline()
 	fmt.Printf("time %s, Main Mock %s success, deadline %s\n", time.Now().UTC().Format("15:04:05"), node.Data, deadline)
@@ -161,14 +177,14 @@ func (node *NodeMock) Failover(ctx context.Context, state *ExecutionState) *Node
 		time.Sleep(time.Second * 1)
 
 		request := ctx.Value(requestDataKey).(*myRequestData)
-		request.Data += " " + node.Data + "-failover"
+		request.Append(" " + node.Data + "-failover")
 
 		fmt.Printf("time %s, Mock %s failover slow finished, timeout `%v`\n", time.Now().UTC().Format("15:04:05"), node.Data, node.TimeoutDuration)
 		return Result(node.Data + "-failover")
 	}
 
 	request := ctx.Value(requestDataKey).(*myRequestData)
-	request.Data += " " + node.Data + "-failover"
+	request.Append(" " + node.Data + "-failover")
 
 	if node.Data == "mock-data-5" {
 		fmt.Printf("time %s, Mock %s failover finished, timeout `%v`\n", time.Now().UTC().Format("15:04:05"), node.Data, node.TimeoutDuration)
@@ -198,7 +214,7 @@ func (node *NodeMock2) Execute(ctx context.Context, state *ExecutionState) *Node
 	// time.Sleep(time.Second * 1)
 
 	request := ctx.Value(requestDataKey).(*myRequestData)
-	request.Data += " NodeMock2:" + node.Data
+	request.Append(" NodeMock2:" + node.Data)
 
 	deadline, _ := ctx.Deadline()
 	fmt.Printf("time %s, Mock2 %s finished, deadline %s\n", time.Now().UTC().Format("15:04:05"), node.Data, deadline)
@@ -208,7 +224,7 @@ func (node *NodeMock2) Execute(ctx context.Context, state *ExecutionState) *Node
 func (node *NodeMock2) Failover(ctx context.Context, state *ExecutionState) *NodeResult {
 	fmt.Printf("time %s, Mock2 %s failed, timeout `%v`\n", time.Now().UTC().Format("15:04:05"), node.Data, node.TimeoutDuration)
 	request := ctx.Value(requestDataKey).(*myRequestData)
-	request.Data += " " + node.Data + "-failover"
+	request.Append(" " + node.Data + "-failover")
 	return Result(node.Data)
 }
 
@@ -316,7 +332,6 @@ func TestDAGConf(t *testing.T) {
 		t.Fatalf("graphConf.Nodes spec is not correct, %v", graphConf.Nodes["my-vec-2"])
 	}
 
-	t.Error("SUCCESS")
 }
 
 func TestYAMLDecoder(t *testing.T) {
@@ -534,7 +549,6 @@ func TestYAMLDecoder(t *testing.T) {
 
 	t.Logf("graph: %v", g)
 
-	t.Error("SUCCESS")
 }
 
 func TestNodeResult(t *testing.T) {
@@ -572,7 +586,6 @@ func TestNodeResult(t *testing.T) {
 		t.Fatalf("NodeResult failed: %v", r)
 	}
 
-	t.Error("SUCCESS")
 }
 
 func TestDAGExecution(t *testing.T) {
@@ -650,7 +663,7 @@ func TestDAGExecution(t *testing.T) {
 
 	t.Logf("%v", state)
 
-	t.Errorf("SUCCESS: %s", req.Data)
+	t.Logf("done: %s", req.Get())
 }
 
 func runGraph(graphYaml string) (*ExecutionState, *myRequestData, error) {
@@ -684,7 +697,7 @@ nodes:
 	if state.Results[state.Symbols["my-vec-5"]].Result != "mock-data-5" {
 		t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-5"]])
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	// parallel_failover 配置必须和 failover_on_timeout 或 failover_on_error 配置一起使用
 	cnt = 2
@@ -836,7 +849,7 @@ nodes:
 	if state.GraphState != TERMINATE_FAILED {
 		t.Fatalf("expected graph state to be TERMINATE_FAILED, got %d\n", state.GraphState)
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	// failover_on_timeout 测试
 	cnt = 4
@@ -858,7 +871,7 @@ nodes:
 	if state.Results[state.Symbols["my-vec-5"]].Result != "mock-data-5-failover" {
 		t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-5"]])
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	// failover_on_error 测试
 	cnt = 5
@@ -883,7 +896,7 @@ nodes:
 	if state.GraphState != TERMINATE_SUCCESS {
 		t.Fatalf("expected graph state to be TERMINATE_SUCCESS, got %d\n", state.GraphState)
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	// 出错并不 failover 测试
 	cnt = 6
@@ -907,7 +920,7 @@ nodes:
 	if state.GraphState != TERMINATE_FAILED {
 		t.Fatalf("expected graph state to be TERMINATE_FAILED, got %d\n", state.GraphState)
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	// 并行 failover 测试，正常情况
 	cnt = 7
@@ -936,7 +949,7 @@ nodes:
 		if state.Results[state.Symbols["my-vec-5"]].Result != data {
 			t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-5"]])
 		}
-		t.Logf("%d: %v - %s", cnt, state, req.Data)
+		t.Logf("%d: %v - %s", cnt, state, req.Get())
 	}
 
 	tmpl = `
@@ -960,7 +973,7 @@ nodes:
 		if state.Results[state.Symbols["my-vec-5"]].Result != data {
 			t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-5"]])
 		}
-		t.Logf("%d: %v - %s", cnt, state, req.Data)
+		t.Logf("%d: %v - %s", cnt, state, req.Get())
 	}
 
 	tmpl = `
@@ -984,7 +997,7 @@ nodes:
 		if state.Results[state.Symbols["my-vec-5"]].Result != data {
 			t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-5"]])
 		}
-		t.Logf("%d: %v - %s", cnt, state, req.Data)
+		t.Logf("%d: %v - %s", cnt, state, req.Get())
 	}
 
 	tmpl = `
@@ -1015,9 +1028,8 @@ edges:
 	if state.Results[state.Symbols["my-vec-4"]].Result != "mock-data-4" {
 		t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-4"]])
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGExecution3(t *testing.T) {
@@ -1054,7 +1066,7 @@ nodes:
 			if !state.Results[state.Symbols["my-vec-7"]].IsFailover {
 				t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-7"]])
 			}
-			t.Logf("%d: %v - %s", cnt, state, req.Data)
+			t.Logf("%d: %v - %s", cnt, state, req.Get())
 		} else if data == "mock-data-5-failover-timeout" {
 			if err != nil {
 				t.Fatalf("%d: %s\n", cnt, err.Error())
@@ -1100,10 +1112,9 @@ nodes:
 				t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-7"]])
 			}
 		}
-		t.Logf("%d: %v - %s", cnt, state, req.Data)
+		t.Logf("%d: %v - %s", cnt, state, req.Get())
 	}
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGExecution4(t *testing.T) {
@@ -1140,7 +1151,7 @@ nodes:
 			if !state.Results[state.Symbols["my-vec-7"]].IsFailover {
 				t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-7"]])
 			}
-			t.Logf("%d: %v - %s", cnt, state, req.Data)
+			t.Logf("%d: %v - %s", cnt, state, req.Get())
 		} else if data == "mock-data-5-failover-timeout" {
 			if err != nil {
 				t.Fatalf("%d: %s\n", cnt, err.Error())
@@ -1183,10 +1194,9 @@ nodes:
 				t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-7"]])
 			}
 		}
-		t.Logf("%d: %v - %s", cnt, state, req.Data)
+		t.Logf("%d: %v - %s", cnt, state, req.Get())
 	}
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGExecution5(t *testing.T) {
@@ -1228,10 +1238,9 @@ nodes:
 		if state.Results[state.Symbols["my-vec-7"]].ResultOnErr != nil {
 			t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-7"]])
 		}
-		t.Logf("%d: %v - %s", cnt, state, req.Data)
+		t.Logf("%d: %v - %s", cnt, state, req.Get())
 	}
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGExecution6(t *testing.T) {
@@ -1322,10 +1331,9 @@ nodes:
 				t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-8"]])
 			}
 		}
-		t.Logf("%d: %v - %s", cnt, state, req.Data)
+		t.Logf("%d: %v - %s", cnt, state, req.Get())
 	}
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGExecution7(t *testing.T) {
@@ -1369,10 +1377,9 @@ nodes:
 			t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-8"]])
 		}
 
-		t.Logf("%d: %v - %s", cnt, state, req.Data)
+		t.Logf("%d: %v - %s", cnt, state, req.Get())
 	}
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGExecution8(t *testing.T) {
@@ -1463,10 +1470,9 @@ nodes:
 				t.Fatalf("%d: NodeResult failed: %v", cnt, state.Results[state.Symbols["my-vec-8"]])
 			}
 		}
-		t.Logf("%d: %v - %s", cnt, state, req.Data)
+		t.Logf("%d: %v - %s", cnt, state, req.Get())
 	}
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGExecution9(t *testing.T) {
@@ -1489,9 +1495,7 @@ nodes:
 	if !os.IsTimeout(err) {
 		t.Fatalf("%d: %s\n", cnt, err.Error())
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
-
-	t.Errorf("SUCCESS")
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	// time.Sleep(10 * time.Second)
 }
@@ -1574,7 +1578,7 @@ nodes:
 		t.Fatalf("%d: %v\n", cnt, state.Results[state.Symbols["my-vec-9"]])
 	}
 
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	tmpl = `
 name: test-graph-2
@@ -1644,7 +1648,6 @@ edges:
 		t.Logf("%d: %v", cnt, bb)
 	}
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGExecution11(t *testing.T) {
@@ -1702,7 +1705,6 @@ edges:
 		t.Fatalf("%d: %s\n", cnt, err.Error())
 	}
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGExecution12(t *testing.T) {
@@ -1762,7 +1764,7 @@ edges:
 	if state.States[state.Symbols["end"]] != TERMINATE_SKIPPED {
 		t.Fatalf("%d: %v\n", cnt, state.States[state.Symbols["end"]])
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	fmt.Printf("=============== %d - 2: start ===============\n", cnt)
 	tmpl = `
@@ -1817,7 +1819,7 @@ edges:
 	if state.States[state.Symbols["my-vec-9-2"]] != TERMINATE_SKIPPED {
 		t.Fatalf("%d: %v\n", cnt, state.States[state.Symbols["my-vec-9-2"]])
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	fmt.Printf("=============== %d - 3: start ===============\n", cnt)
 	tmpl = `
@@ -1872,9 +1874,8 @@ edges:
 	if state.States[state.Symbols["my-vec-9-2"]] != TERMINATE_SKIPPED {
 		t.Fatalf("%d: %v\n", cnt, state.States[state.Symbols["my-vec-9-2"]])
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
-	t.Errorf("SUCCESS")
 }
 
 func TestDAGExecution13(t *testing.T) {
@@ -1935,7 +1936,7 @@ edges:
 	if state.States[state.Symbols["my-vec-9-2"]] != TERMINATE_SKIPPED {
 		t.Fatalf("%d: %v\n", cnt, state.States[state.Symbols["my-vec-9-2"]])
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
 	tmpl = `
 name: test-graph-2
@@ -1989,7 +1990,6 @@ edges:
 	if state.States[state.Symbols["my-vec-9-2"]] != TERMINATE_SKIPPED {
 		t.Fatalf("%d: %v\n", cnt, state.States[state.Symbols["my-vec-9-2"]])
 	}
-	t.Logf("%d: %v - %s", cnt, state, req.Data)
+	t.Logf("%d: %v - %s", cnt, state, req.Get())
 
-	t.Errorf("SUCCESS")
 }
