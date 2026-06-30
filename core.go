@@ -345,36 +345,47 @@ func NewExecutionState(g *DAG) (state *ExecutionState, err error) {
 }
 
 func (g *DAG) runNode(ctx context.Context, idx int, state *ExecutionState) {
-	done := make(chan int, 2)
-	var result *NodeResult
-	var failoverResult *NodeResult
-	newctx, cancel := g.Nodes[idx].WithContext(ctx)
+	node := g.Nodes[idx]
+	newctx, cancel := node.WithContext(ctx)
+
+	// 用带缓冲的 channel 传递结果，避免在多个 goroutine 间裸共享变量（数据竞态）。
+	// 缓冲大小为 1，保证即使主流程不再读取，发送方 goroutine 也不会泄漏。
+	resultCh := make(chan *NodeResult, 1)
+	failoverCh := make(chan *NodeResult, 1)
 
 	defer func() {
 		cancel()
-		g.Nodes[idx].OnFinished(newctx, state, state.Results[idx])
+		node.OnFinished(newctx, state, state.Results[idx])
 	}()
 
 	go func() {
-		result = g.Nodes[idx].Execute(newctx, state)
-		done <- 1
+		resultCh <- node.Execute(newctx, state)
 	}()
 
-	if g.Nodes[idx].ParallelFailover() {
+	if node.ParallelFailover() {
 		go func() {
-			failoverResult = g.Nodes[idx].Failover(newctx, state)
-			done <- 2
+			failoverCh <- node.Failover(newctx, state)
 		}()
 	}
+
+	var result *NodeResult
+	var failoverResult *NodeResult
 
 loopSelect:
 	for {
 		select {
 		case <-newctx.Done():
 			// 此时 Execute() 可能没有返回，也可能返回但有错误，而且并行的 Failover() 还没有结束
-			if g.Nodes[idx].FailoverOnTimeout() {
+			if node.FailoverOnTimeout() {
 				// 调用 failover 方法进行容错
-				if g.Nodes[idx].ParallelFailover() {
+				if node.ParallelFailover() {
+					// 非阻塞地获取并行 Failover() 的结果：已就绪则取用，否则视为也超时了
+					if failoverResult == nil {
+						select {
+						case failoverResult = <-failoverCh:
+						default:
+						}
+					}
 					if failoverResult != nil {
 						state.Results[idx] = failoverResult
 					} else {
@@ -383,7 +394,7 @@ loopSelect:
 						state.Results[idx] = ErrorResult(newctx.Err())
 					}
 				} else {
-					state.Results[idx] = g.Nodes[idx].Failover(newctx, state)
+					state.Results[idx] = node.Failover(newctx, state)
 				}
 				state.Results[idx].IsFailover = true
 				if result != nil {
@@ -403,27 +414,30 @@ loopSelect:
 				}
 			}
 			break loopSelect
-		case <-done:
-			if result != nil {
-				if result.Err != nil && g.Nodes[idx].FailoverOnError() {
-					// 调用 failover 方法进行容错
-					if g.Nodes[idx].ParallelFailover() {
-						if failoverResult == nil {
-							// Failover() 还没有返回，等待结果
-							// 这是有可能的：比如 Execute() 遇到一个错误可能比 Failover() 更快结束
+		case result = <-resultCh:
+			if result.Err != nil && node.FailoverOnError() {
+				// 调用 failover 方法进行容错
+				if node.ParallelFailover() {
+					if failoverResult == nil {
+						// 等待并行 Failover() 返回结果（或超时）
+						// 这是有可能的：比如 Execute() 遇到一个错误可能比 Failover() 更快结束
+						select {
+						case failoverResult = <-failoverCh:
+						case <-newctx.Done():
+							// 超时交给下一轮 <-newctx.Done() 分支处理
 							continue
 						}
-					} else {
-						failoverResult = g.Nodes[idx].Failover(newctx, state)
 					}
-					state.Results[idx] = failoverResult
-					state.Results[idx].IsFailover = true
-					state.Results[idx].ResultOnErr = result // 保存 Execute() 的结果
 				} else {
-					state.Results[idx] = result
+					failoverResult = node.Failover(newctx, state)
 				}
-				break loopSelect
+				state.Results[idx] = failoverResult
+				state.Results[idx].IsFailover = true
+				state.Results[idx].ResultOnErr = result // 保存 Execute() 的结果
+			} else {
+				state.Results[idx] = result
 			}
+			break loopSelect
 		}
 	}
 }
@@ -446,11 +460,12 @@ func (g *DAG) Execute(ctx context.Context) (state *ExecutionState, err error) {
 			break
 		}
 		for _, vidx := range state.Readys {
+			// 在主 goroutine 中标记为运行中：调度决策（onNodeDone 中读取 Running）
+			// 全部发生在主 goroutine，避免与子 goroutine 的写入产生竞态。
+			state.Running[vidx] = NODE_RUNNING
 			go func(idx int) {
 				start := time.Now().UTC()
-				state.Running[idx] = NODE_RUNNING
 				g.runNode(ctx, idx, state)
-				state.Running[idx] = NODE_FINISHED
 				state.Results[idx].Dura = time.Now().UTC().Sub(start)
 				state.Done <- idx
 			}(vidx)
@@ -460,7 +475,12 @@ func (g *DAG) Execute(ctx context.Context) (state *ExecutionState, err error) {
 		for running > 0 {
 			select {
 			case <-ctx.Done():
-				// 图超时
+				// 图超时：在执行中的节点 goroutine 的 newctx 派生自 ctx，已被取消，会迅速从
+				// runNode 返回。返回前排空它们，避免其在调用方读取 state 后仍继续写入而产生竞态。
+				for running > 0 {
+					<-state.Done
+					running--
+				}
 				return state, ctx.Err()
 			case finishedIdx := <-state.Done:
 				running--
